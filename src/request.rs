@@ -1,6 +1,6 @@
-use std::{fmt, io, slice, str};
+use std::{fmt, io, slice, str, ptr::null};
 
-use bytes::BytesMut;
+use bytes::{BytesMut, BufMut};
 
 pub struct Request {
     method: Slice,
@@ -9,6 +9,7 @@ pub struct Request {
     headers: [(Slice, Slice); 16],
     headers_len: usize,
     data: BytesMut,
+    body: BytesMut,
 }
 
 type Slice = (usize, usize);
@@ -40,8 +41,8 @@ impl Request {
         }
     }
 
-    pub fn body(&self) -> &[u8] {
-        unimplemented!()
+    pub fn body_(&self) -> &[u8] {
+        self.body.as_ref()
     }
 
     fn slice(&self, slice: &Slice) -> &[u8] {
@@ -56,6 +57,8 @@ impl fmt::Debug for Request {
 }
 
 pub fn decode(buf: &mut BytesMut) -> io::Result<Option<Request>> {
+    // println!("input is {}", std::str::from_utf8(&buf.to_vec()).unwrap());
+    
     let mut headers: [httparse::Header; 16] =
         unsafe { std::mem::MaybeUninit::uninit().assume_init() };
     let mut r = httparse::Request::new(&mut headers);
@@ -89,6 +92,9 @@ pub fn decode(buf: &mut BytesMut) -> io::Result<Option<Request>> {
         headers_len += 1;
     }
 
+    // fixme 优化get性能
+    // let mut body = BytesMut::new();
+    // body.put(buf.split_at(amt).1);
     Ok(Some(Request {
         method: toslice(r.method.unwrap().as_bytes()),
         path: toslice(r.path.unwrap().as_bytes()),
@@ -96,6 +102,7 @@ pub fn decode(buf: &mut BytesMut) -> io::Result<Option<Request>> {
         headers,
         headers_len,
         data: buf.split_to(amt),
+        body: buf.split(),
     }))
 }
 

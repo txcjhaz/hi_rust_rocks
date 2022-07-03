@@ -117,6 +117,9 @@ pub fn encode(mut msg: Response, mut buf: &mut BytesMut) {
 
     buf.extend_from_slice(b"\r\n\r\n");
     buf.extend_from_slice(msg.get_body());
+
+    // println!("resp is {}", std::str::from_utf8(&buf.to_vec()).unwrap());
+
     msg.clear_body();
 }
 

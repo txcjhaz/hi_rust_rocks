@@ -25,7 +25,7 @@ macro_rules! t {
                     return;
                 }
 
-                error!("call = {:?}\nerr = {:?}", stringify!($e), err);
+                println!("call = {:?}\nerr = {:?}", stringify!($e), err);
                 return;
             }
         }
@@ -207,7 +207,10 @@ fn each_connection_loop<T: HttpService>(mut stream: TcpStream, mut service: T) {
         unsafe { req_buf.advance_mut(n) };
 
         // prepare the reqs
-        while let Some(req) = t!(request::decode(&mut req_buf)) {
+        let maybe_req = t!(request::decode(&mut req_buf));
+        // while let Some(req) = maybe_req {
+        if !maybe_req .is_none() {
+            let req = maybe_req.unwrap();
             let mut rsp = Response::new(&mut body_buf);
             if let Err(e) = service.call(req, &mut rsp) {
                 let err_rsp = internal_error_rsp(e, &mut body_buf);
@@ -219,6 +222,7 @@ fn each_connection_loop<T: HttpService>(mut stream: TcpStream, mut service: T) {
 
         // send the result back to client
         t!(stream.write_all(rsp_buf.as_ref()));
+        req_buf.clear();
         rsp_buf.clear();
     }
 }
