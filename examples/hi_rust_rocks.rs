@@ -2,7 +2,7 @@ use std::{io, fmt::Write};
 
 use may_minihttp::{HttpService, HttpServiceFactory, Request, Response, KvUtil, MockKvUtil};
 use rocksdb::DB;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 extern crate serde;
 
@@ -15,11 +15,25 @@ struct Techempower {
     kv: MockKvUtil
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Serialize, Debug)]
 struct KeyValue<'a> {
     key: &'a str,
     value: &'a str
 }
+
+#[derive(Deserialize, Serialize, Debug)]
+struct ZValue<'a> {
+    score: u32,
+    value: &'a str
+}
+
+#[derive(Deserialize, Serialize, Debug)]
+struct ZRangeScore {
+    min_score: u32,
+    max_score: u32
+}
+
+
 
 impl HttpService for Techempower {
 
@@ -51,19 +65,24 @@ impl HttpService for Techempower {
         else if req.path() == "/list" {
             let r_body = req.body_();
             let keys: Vec<&str> = serde_json::from_slice(r_body).unwrap();  // FIXME 处理异常         
-            let vals = self.kv.mget(keys);
+            
+            let vals = self.kv.mget(&keys);
+
             let mut resp = Vec::<KeyValue>::new();
             let mut i = 0;
-            // while i < vals.len() {
-            //     let item = KeyValue {
-            //         key: keys[i].clone(),
-            //         value: vals[i].clone()
-            //     };
-            //     resp.push(item);
-            //     i = i + 1;
-            // }
-            
-            rsp.header("Content-Type: text/plain").body("get response");
+            while i < vals.len() {
+                let item = KeyValue {
+                    key: keys[i],
+                    value: vals[i]
+                };
+                resp.push(item);
+                i = i + 1;
+            }
+            let resp_body = serde_json::to_string(&resp).unwrap();
+            let b = rsp.body_mut();
+            b.write_str(resp_body.as_str()).unwrap(); // TODO err handle
+
+            rsp.header("Content-Type: application/json");
         }
         else if req.path() == "/batch" {
             let r_body = req.body_();
@@ -77,16 +96,29 @@ impl HttpService for Techempower {
                 vals.push(p.value);
             }
 
-            self.kv.mset(keys, vals);
+            self.kv.mset(&keys, &vals);
         }
         else if req.path().starts_with("/zadd/") {
-            rsp.header("Content-Type: text/plain").body("get response");
+            let key = &req.path()[6..];
+            let r_body = req.body_();
+            // println!("key is {}, body is {}", key, std::str::from_utf8(&r_body.to_vec()).unwrap());
+            let z_val: ZValue = serde_json::from_slice(r_body).unwrap();  // FIXME 处理异常
+
+            self.kv.zadd(key, z_val.value, &z_val.score);
         }
         else if req.path().starts_with("/zrange/") {
-            rsp.header("Content-Type: text/plain").body("get response");
+            let key = &req.path()[8..];
+            let r_body = req.body_();
+            println!("key is {}, body is {}", key, std::str::from_utf8(&r_body.to_vec()).unwrap());
+            let z_score: ZRangeScore = serde_json::from_slice(r_body).unwrap();  // FIXME 处理异常
+
+            self.kv.zrange(key, &z_score.min_score, &&z_score.max_score);
         }
         else if req.path().starts_with("/zrmv/") {
-            rsp.header("Content-Type: text/plain").body("get response");
+            let keyAndValue = &req.path()[6..];
+            let splits: Vec<&str> = keyAndValue.split('/').collect();
+            // println!("key is {}, val is {}", splits[0], splits[1]);
+            self.kv.zrmv(splits[0], splits[1]);
         }
         else {
             rsp.status_code("404", "Not Found");
@@ -108,8 +140,13 @@ impl HttpServiceFactory for HttpServer {
 }
 
 fn main() {
-    // let mut db = DB::open_default("/path/for/rocksdb/storage").unwrap();
+    // init rocksdb
+    // let mut db = 
+    //     DB::open_default("C:/Users/txcjh/Desktop/Projects/may_minihttp/storage").unwrap();
     // db.put(b"my key", b"my value");
+    // let resp = db.get("my key").unwrap().unwrap();
+    // println!("value is {}", std::str::from_utf8(resp.as_ref()).unwrap());
+    
     may::config()
         .set_pool_capacity(10000)
         .set_stack_size(0x1000);
