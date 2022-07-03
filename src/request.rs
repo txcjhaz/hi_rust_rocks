@@ -1,6 +1,6 @@
-use std::{fmt, io, slice, str, ptr::null};
+use std::{fmt, io, slice, str};
 
-use bytes::{BytesMut, BufMut};
+use bytes::{BytesMut};
 
 pub struct Request {
     method: Slice,

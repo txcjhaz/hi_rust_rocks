@@ -1,6 +1,4 @@
-use kv_util::KvUtil;
-
-use crate::{kv_util, MockKvUtil};
+use crate::{MockKvUtil};
 
 pub struct HiRustRocksService {
     pub kv: MockKvUtil
