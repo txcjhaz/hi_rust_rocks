@@ -13,8 +13,8 @@ itoa = "0.4"
 bytes = "1"
 httparse = "1"
 lazy_static = "1"
-# redis = "0.21.5"
 rocksdb = { git = "https://github.com/rust-rocksdb/rust-rocksdb" }
+rusty-leveldb = "1.0.1"
 
 [dev-dependencies]
 mimalloc = "0.1"
@@ -27,6 +27,6 @@ serde_json = "1.0.82"
 yarte = { version = "0.15", features = ["bytes-buf", "json"] }
 
 [profile.release]
-lto = true
+lto = false
 opt-level = 3
 codegen-units = 1

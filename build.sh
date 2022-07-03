@@ -1,0 +1,1 @@
+cargo build --example=hi_rust_rocks --release
