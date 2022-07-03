@@ -1,6 +1,6 @@
 use std::{io, fmt::Write};
 
-use may_minihttp::{HttpService, HttpServiceFactory, Request, Response, KvUtil, MockKvUtil};
+use may_minihttp::{HttpService, HttpServiceFactory, Request, Response, KvUtil, MockKvUtil, RocksdbUtil};
 use rocksdb::DB;
 use serde::{Deserialize, Serialize};
 
@@ -11,8 +11,8 @@ extern crate serde;
 //     message: &'static str,
 // }
 
-struct Techempower {
-    kv: MockKvUtil
+struct Techempower<'a> {
+    kv: &'a RocksdbUtil
 }
 
 #[derive(Deserialize, Serialize, Debug)]
@@ -35,7 +35,7 @@ struct ZRangeScore {
 
 
 
-impl HttpService for Techempower {
+impl HttpService for Techempower<'_> {
 
     fn call(&mut self, req: Request, rsp: &mut Response) -> io::Result<()> {
         // Bare-bones router
@@ -46,7 +46,7 @@ impl HttpService for Techempower {
             let key = &req.path()[7..];
             let val = self.kv.get(key);
             let b = rsp.body_mut();
-            b.write_str(val).unwrap(); // TODO err handle
+            b.write_str(&val).unwrap(); // TODO err handle
             // println!("key is {}, val is {}", key, val);
             rsp.header("Content-Type: text/plain");
         }
@@ -73,7 +73,7 @@ impl HttpService for Techempower {
             while i < vals.len() {
                 let item = KeyValue {
                     key: keys[i],
-                    value: vals[i]
+                    value: &vals[i]
                 };
                 resp.push(item);
                 i = i + 1;
@@ -128,29 +128,31 @@ impl HttpService for Techempower {
     }
 }
 
-struct HttpServer {}
+struct HttpServer<'a> {
+    db: &'a RocksdbUtil
+}
 
-impl HttpServiceFactory for HttpServer {
-    type Service = Techempower;
+impl HttpServiceFactory for HttpServer<'_> {
+    type Service<'a> = Techempower<'a>;
 
     fn new_service(&self) -> Self::Service {
-        let kv_util_impl = MockKvUtil {};
-        Techempower { kv: kv_util_impl }
+        // let kv_util_impl = MockKvUtil {};
+        Techempower { kv: self.db }
     }
+
 }
 
 fn main() {
-    // init rocksdb
-    // let mut db = 
-    //     DB::open_default("C:/Users/txcjh/Desktop/Projects/may_minihttp/storage").unwrap();
-    // db.put(b"my key", b"my value");
-    // let resp = db.get("my key").unwrap().unwrap();
-    // println!("value is {}", std::str::from_utf8(resp.as_ref()).unwrap());
-    
+    let mut rocksdb = 
+    DB::open_default("C:/Users/txcjh/Desktop/Projects/may_minihttp/storage").unwrap();
+    println!("a lei ? {}", String::from_utf8(rocksdb.get("test").unwrap().unwrap()).unwrap());
+
     may::config()
         .set_pool_capacity(10000)
         .set_stack_size(0x1000);
-    let http_server = HttpServer {};
+    let http_server = HttpServer { db: &RocksdbUtil { db: 
+        rocksdb
+    }};
     let server = http_server.start("0.0.0.0:8081").unwrap();
     server.join().unwrap();
 }

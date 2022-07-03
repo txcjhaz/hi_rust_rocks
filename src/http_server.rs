@@ -47,12 +47,12 @@ macro_rules! t_c {
 /// the http service trait
 /// user code should supply a type that impl the `call` method for the http server
 ///
-pub trait HttpService {
+pub trait HttpService<'a> {
     fn call(&mut self, req: Request, rsp: &mut Response) -> io::Result<()>;
 }
 
-pub trait HttpServiceFactory: Send + Sized + 'static {
-    type Service: HttpService + Send;
+pub trait HttpServiceFactory<'a>: Send + Sized + 'static {
+    type Service: HttpService<'a> + Send;
     // creat a new http service for each connection
     fn new_service(&self) -> Self::Service;
 
@@ -184,7 +184,7 @@ fn each_connection_loop<T: HttpService>(mut stream: TcpStream, mut service: T) {
 }
 
 #[cfg(not(unix))]
-fn each_connection_loop<T: HttpService>(mut stream: TcpStream, mut service: T) {
+fn each_connection_loop<'a, T: HttpService<'a>>(mut stream: TcpStream, mut service: T) {
     let mut req_buf = BytesMut::with_capacity(4096 * 8);
     let mut rsp_buf = BytesMut::with_capacity(4096 * 32);
     let mut body_buf = BytesMut::with_capacity(4096 * 8);
@@ -227,7 +227,7 @@ fn each_connection_loop<T: HttpService>(mut stream: TcpStream, mut service: T) {
     }
 }
 
-impl<T: HttpService + Clone + Send + Sync + 'static> HttpServer<T> {
+impl<'a, T: HttpService<'a> + Clone + Send + Sync + 'static> HttpServer<T> {
     /// Spawns the http service, binding to the given address
     /// return a coroutine that you can cancel it when need to stop the service
     pub fn start<L: ToSocketAddrs>(self, addr: L) -> io::Result<coroutine::JoinHandle<()>> {
