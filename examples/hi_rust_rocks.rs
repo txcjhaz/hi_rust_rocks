@@ -69,7 +69,7 @@ impl HttpService for Techempower {
             let b = rsp.body_mut();
             let mut i = 0;
             if (keys.len() > 0) {
-                b.write_char('{').unwrap();
+                b.write_char('[').unwrap();
             } 
 
             while i < keys.len() {
@@ -82,11 +82,14 @@ impl HttpService for Techempower {
                 let tmp = serde_json::to_string(&item).unwrap();
                 b.write_str(&tmp).unwrap();
 
+                i = i + 1;
+
                 if i == keys.len() {
-                    b.write_char('}').unwrap();
+                    b.write_char(']').unwrap();
                 } else {
                     b.write_char(',').unwrap();
                 }
+
             }
             rsp.header("Content-Type: application/json");
         }
