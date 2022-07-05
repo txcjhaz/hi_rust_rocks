@@ -13,7 +13,6 @@ itoa = "0.4"
 bytes = "1"
 httparse = "1"
 lazy_static = "1"
-rocksdb = { git = "https://github.com/rust-rocksdb/rust-rocksdb" }
 # rusty-leveldb = "1.0.1"
 
 [dev-dependencies]
@@ -30,3 +29,8 @@ yarte = { version = "0.15", features = ["bytes-buf", "json"] }
 lto = false
 opt-level = 3
 codegen-units = 1
+
+[dependencies.rocksdb]
+git = "https://github.com/rust-rocksdb/rust-rocksdb"
+default-features = false
+features = ["lz4"]

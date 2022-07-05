@@ -147,14 +147,28 @@ fn main() {
         .set_pool_capacity(10000)
         .set_stack_size(0x1000);
     let http_server = HttpServer {};
-    let server = http_server.start("0.0.0.0:8081").unwrap();
+    let server = http_server.start("0.0.0.0:8080").unwrap();
     server.join().unwrap();
 }
 
 lazy_static!{
     static ref ROCKS: RocksdbUtil = {
         println!("rocksdb init");
-        let db = DB::open_default("C:/Users/txcjh/Desktop/Projects/may_minihttp/storage").unwrap();
+
+        // let mut cf_opts = rocksdb::Options::default();
+        // cf_opts.set_max_write_buffer_number(16);
+        // let cf = rocksdb::ColumnFamilyDescriptor::new("cf1", cf_opts);
+        
+        // enable block cache
+        let mut db_opts = rocksdb::Options::default();
+        db_opts.create_if_missing(true);
+        db_opts.create_missing_column_families(true);
+        let cache = rocksdb::Cache::new_lru_cache(10485760).unwrap();
+        let mut block_opts = rocksdb::BlockBasedOptions::default();
+        block_opts.set_block_cache(&cache);
+        db_opts.set_block_based_table_factory(&block_opts);
+
+        let db = DB::open(&db_opts, "/root/data").unwrap();
         println!("rocksdb init successfully");
         RocksdbUtil { db: db }
     };
