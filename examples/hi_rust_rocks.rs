@@ -66,22 +66,28 @@ impl HttpService for Techempower {
             let r_body = req.body_();
             let keys: Vec<&str> = serde_json::from_slice(r_body).unwrap();  // FIXME 处理异常         
             
-            let vals = ROCKS.mget(&keys);
-
-            let mut resp = Vec::<KeyValue>::new();
+            let b = rsp.body_mut();
             let mut i = 0;
-            while i < vals.len() {
+            if (keys.len() > 0) {
+                b.write_char('{').unwrap();
+            } 
+
+            while i < keys.len() {
+                let v = ROCKS.db.get(keys[i]).unwrap().unwrap();
+                let r =  std::str::from_utf8(v.as_ref()).unwrap();
                 let item = KeyValue {
                     key: keys[i],
-                    value: &vals[i]
+                    value: r
                 };
-                resp.push(item);
-                i = i + 1;
-            }
-            let resp_body = serde_json::to_string(&resp).unwrap();
-            let b = rsp.body_mut();
-            b.write_str(resp_body.as_str()).unwrap(); // TODO err handle
+                let tmp = serde_json::to_string(&item).unwrap();
+                b.write_str(&tmp).unwrap();
 
+                if i == keys.len() {
+                    b.write_char('}').unwrap();
+                } else {
+                    b.write_char(',').unwrap();
+                }
+            }
             rsp.header("Content-Type: application/json");
         }
         else if req.path() == "/batch" {
@@ -89,14 +95,9 @@ impl HttpService for Techempower {
             // println!("body is {}", std::str::from_utf8(&r_body.to_vec()).unwrap());
 
             let kv: Vec<KeyValue> = serde_json::from_slice(r_body).unwrap();  // FIXME 处理异常         
-            let mut keys = Vec::new();
-            let mut vals = Vec::new();
             for p in kv.iter() {
-                keys.push(p.key);
-                vals.push(p.value);
+                ROCKS.set(p.key, p.value);
             }
-
-            ROCKS.mset(&keys, &vals);
         }
         else if req.path().starts_with("/zadd/") {
             let key = &req.path()[6..];
@@ -163,12 +164,12 @@ lazy_static!{
         let mut db_opts = rocksdb::Options::default();
         db_opts.create_if_missing(true);
         db_opts.create_missing_column_families(true);
-        let cache = rocksdb::Cache::new_lru_cache(10485760).unwrap();
+        let cache = rocksdb::Cache::new_lru_cache(10_737_418_240).unwrap();
         let mut block_opts = rocksdb::BlockBasedOptions::default();
         block_opts.set_block_cache(&cache);
         db_opts.set_block_based_table_factory(&block_opts);
 
-        let db = DB::open(&db_opts, "/root/data").unwrap();
+        let db = DB::open(&db_opts, "./data").unwrap();
         println!("rocksdb init successfully");
         RocksdbUtil { db: db }
     };
