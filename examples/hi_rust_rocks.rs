@@ -158,7 +158,7 @@ lazy_static! {
         block_opts.set_block_cache(&cache);
         db_opts.set_block_based_table_factory(&block_opts);
 
-        let db = DB::open(&db_opts, "./data").unwrap();
+        let db = DB::open(&db_opts, "/data/").unwrap();
         println!("rocksdb init successfully");
         db
     };
