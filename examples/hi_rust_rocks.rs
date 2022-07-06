@@ -161,41 +161,41 @@ lazy_static! {
     static ref ROCKS: rocksdb::DB = {
         println!("rocksdb init");
 
-        // let mut cf_opts = rocksdb::Options::default();
-        // cf_opts.set_max_write_buffer_number(16);
-        // cf_opts.set_allow_mmap_writes(true);
-        // cf_opts.set_allow_mmap_reads(true);
-        // cf_opts.set_write_buffer_size(512 << 20);
-        // cf_opts.set_compression_type(DBCompressionType::Lz4);
-        // cf_opts.set_bottommost_compression_type(DBCompressionType::Zstd);
-        // cf_opts.set_level_compaction_dynamic_level_bytes(true);
-        // let cf = rocksdb::ColumnFamilyDescriptor::new("cf1", cf_opts);
+        let mut cf_opts = rocksdb::Options::default();
+        cf_opts.set_max_write_buffer_number(16);
+        cf_opts.set_allow_mmap_writes(true);
+        cf_opts.set_allow_mmap_reads(true);
+        cf_opts.set_write_buffer_size(512 << 20);
+        cf_opts.set_compression_type(DBCompressionType::Lz4);
+        cf_opts.set_bottommost_compression_type(DBCompressionType::Zstd);
+        cf_opts.set_level_compaction_dynamic_level_bytes(true);
+        let cf = rocksdb::ColumnFamilyDescriptor::new("cf1", cf_opts);
         
-        // let mut db_opts = rocksdb::Options::default();
-        // db_opts.create_if_missing(true);
-        // db_opts.create_missing_column_families(true);
-        // db_opts.set_db_write_buffer_size(4 << 20);
-        // db_opts.set_optimize_filters_for_hits(true);
+        let mut db_opts = rocksdb::Options::default();
+        db_opts.create_if_missing(true);
+        db_opts.create_missing_column_families(true);
+        db_opts.set_db_write_buffer_size(4 << 20);
+        db_opts.set_optimize_filters_for_hits(true);
         // db_opts.set_ratelimiter(1024 * 1024, 100 * 1000, 10);
-        // db_opts.set_max_background_jobs(4);
-        // db_opts.set_bytes_per_sync(1048576);
+        db_opts.set_max_background_jobs(4);
+        db_opts.set_bytes_per_sync(1048576);
 
-        // // enable block cache
-        // let cache = rocksdb::Cache::new_lru_cache(6 << 30).unwrap();
-        // let mut block_opts = rocksdb::BlockBasedOptions::default();
-        // block_opts.set_block_cache(&cache);
-        // block_opts.set_block_size(16 * 1024);
-        // block_opts.set_cache_index_and_filter_blocks(true);
-        // block_opts.set_pin_l0_filter_and_index_blocks_in_cache(true);
-        // block_opts.set_format_version(5);
-        // // enable bloom filter optimize
-        // block_opts.set_bloom_filter(10.0, false);
+        // enable block cache
+        let cache = rocksdb::Cache::new_lru_cache(6 << 30).unwrap();
+        let mut block_opts = rocksdb::BlockBasedOptions::default();
+        block_opts.set_block_cache(&cache);
+        block_opts.set_block_size(16 * 1024);
+        block_opts.set_cache_index_and_filter_blocks(true);
+        block_opts.set_pin_l0_filter_and_index_blocks_in_cache(true);
+        block_opts.set_format_version(5);
+        // enable bloom filter optimize
+        block_opts.set_bloom_filter(10.0, false);
 
-        // db_opts.set_block_based_table_factory(&block_opts);
+        db_opts.set_block_based_table_factory(&block_opts);
 
 
-        let db = DB::open_default("/data/").unwrap();
-        // let db = DB::open(&db_opts, "/data/").unwrap();
+        // let db = DB::open_default("/data/").unwrap();
+        let db = DB::open_cf_descriptors(&db_opts, "/data/", vec![cf]).unwrap();
         println!("rocksdb init successfully");
         db
     };
