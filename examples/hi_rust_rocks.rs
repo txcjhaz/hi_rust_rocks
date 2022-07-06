@@ -1,4 +1,4 @@
-use std::{io, fmt::Write};
+use std::{io, fmt::Write, os::raw};
 use bytes::BufMut;
 
 use may_minihttp::{HttpService, HttpServiceFactory, Request, Response, KvUtil, MockKvUtil, RocksdbUtil};
@@ -42,19 +42,24 @@ impl HttpService for Techempower {
             rsp.header("Content-Type: text/plain").body("ok");
         } else if req.path().starts_with("/query/") {
             let key = &req.path()[7..];
-            let val = String::from_utf8(ROCKS.get(key).unwrap().unwrap()).unwrap();
-            rsp.body_mut().write_str(&val).unwrap(); // TODO err handle
+            let raw_val = ROCKS.get(key).unwrap();
+            if (raw_val.is_none()) {
+                rsp.status_code("404", "Not Found");
+                return Ok(());
+            }
+            let val = String::from_utf8(raw_val.unwrap()).unwrap();
+            rsp.body_mut().write_str(&val); // TODO err handle
             // println!("key is {}, val is {}", key, val);
             rsp.header("Content-Type: text/plain");
         } else if req.path() == "/add" {
             let r_body = req.body_();
             // println!("body is {}", std::str::from_utf8(&r_body.to_vec()).unwrap());
             let kv: KeyValue = serde_json::from_slice(r_body).unwrap();  // FIXME 处理异常         
-            ROCKS.put(kv.key, kv.value).unwrap();
+            ROCKS.put(kv.key, kv.value);
             // println!("to add key is {}, value is {}", kv.key, kv.value);
         } else if req.path().starts_with("/del/") {
             let key = &req.path()[7..];
-            ROCKS.delete(key).unwrap();
+            ROCKS.delete(key);
             // println!("del key is {}", key);
         } else if req.path() == "/list" {
             let r_body = req.body_();
@@ -62,19 +67,26 @@ impl HttpService for Techempower {
 
             let b = rsp.body_mut();
             let mut i = 0;
-            if (keys.len() > 0) {
+            let len = keys.len();
+            if len > 0 {
                 b.write_char('[').unwrap();
             }
 
-            while i < keys.len() {
-                let v = ROCKS.get(keys[i]).unwrap().unwrap();
-                let r = std::str::from_utf8(v.as_ref()).unwrap();
-                let item = KeyValue {
-                    key: keys[i],
-                    value: r,
-                };
-                let tmp = serde_json::to_string(&item).unwrap();
-                b.write_str(&tmp).unwrap();
+            let res = ROCKS.multi_get(keys.clone());
+
+            while i < len {
+                let key = keys[i];
+                let raw_val = res[i].clone().unwrap();
+
+                if (raw_val.is_none()) {
+                    rsp.status_code("404", "Not Found");
+                    return Ok(());
+                }
+
+                let v = raw_val.unwrap();
+                let value = std::str::from_utf8(v.as_ref()).unwrap();
+                let item = format!("{{\"key\":{}, \"value\":{}}}", key, value);
+                b.write_str(&item).unwrap();
 
                 i = i + 1;
 
@@ -83,6 +95,10 @@ impl HttpService for Techempower {
                 } else {
                     b.write_char(',').unwrap();
                 }
+            }
+
+            if len > 0 {
+                b.write_char(']').unwrap();
             }
             rsp.header("Content-Type: application/json");
         } else if req.path() == "/batch" {
@@ -145,40 +161,41 @@ lazy_static! {
     static ref ROCKS: rocksdb::DB = {
         println!("rocksdb init");
 
-        let mut cf_opts = rocksdb::Options::default();
-        cf_opts.set_max_write_buffer_number(16);
-        cf_opts.set_allow_mmap_writes(true);
-        cf_opts.set_allow_mmap_reads(true);
-        cf_opts.set_write_buffer_size(512 << 20);
-        cf_opts.set_compression_type(DBCompressionType::Lz4);
-        cf_opts.set_bottommost_compression_type(DBCompressionType::Zstd);
-        cf_opts.set_level_compaction_dynamic_level_bytes(true);
-        let cf = rocksdb::ColumnFamilyDescriptor::new("cf1", cf_opts);
+        // let mut cf_opts = rocksdb::Options::default();
+        // cf_opts.set_max_write_buffer_number(16);
+        // cf_opts.set_allow_mmap_writes(true);
+        // cf_opts.set_allow_mmap_reads(true);
+        // cf_opts.set_write_buffer_size(512 << 20);
+        // cf_opts.set_compression_type(DBCompressionType::Lz4);
+        // cf_opts.set_bottommost_compression_type(DBCompressionType::Zstd);
+        // cf_opts.set_level_compaction_dynamic_level_bytes(true);
+        // let cf = rocksdb::ColumnFamilyDescriptor::new("cf1", cf_opts);
         
-        let mut db_opts = rocksdb::Options::default();
-        db_opts.create_if_missing(true);
-        db_opts.create_missing_column_families(true);
-        db_opts.set_db_write_buffer_size(4 << 20);
-        db_opts.set_optimize_filters_for_hits(true);
-        db_opts.set_ratelimiter(1024 * 1024, 100 * 1000, 10);
-        db_opts.set_max_background_jobs(4);
-        db_opts.set_bytes_per_sync(1048576);
+        // let mut db_opts = rocksdb::Options::default();
+        // db_opts.create_if_missing(true);
+        // db_opts.create_missing_column_families(true);
+        // db_opts.set_db_write_buffer_size(4 << 20);
+        // db_opts.set_optimize_filters_for_hits(true);
+        // db_opts.set_ratelimiter(1024 * 1024, 100 * 1000, 10);
+        // db_opts.set_max_background_jobs(4);
+        // db_opts.set_bytes_per_sync(1048576);
 
-        // enable block cache
-        let cache = rocksdb::Cache::new_lru_cache(6 << 30).unwrap();
-        let mut block_opts = rocksdb::BlockBasedOptions::default();
-        block_opts.set_block_cache(&cache);
-        block_opts.set_block_size(16 * 1024);
-        block_opts.set_cache_index_and_filter_blocks(true);
-        block_opts.set_pin_l0_filter_and_index_blocks_in_cache(true);
-        block_opts.set_format_version(5);
-        // enable bloom filter optimize
-        block_opts.set_bloom_filter(10.0, false);
+        // // enable block cache
+        // let cache = rocksdb::Cache::new_lru_cache(6 << 30).unwrap();
+        // let mut block_opts = rocksdb::BlockBasedOptions::default();
+        // block_opts.set_block_cache(&cache);
+        // block_opts.set_block_size(16 * 1024);
+        // block_opts.set_cache_index_and_filter_blocks(true);
+        // block_opts.set_pin_l0_filter_and_index_blocks_in_cache(true);
+        // block_opts.set_format_version(5);
+        // // enable bloom filter optimize
+        // block_opts.set_bloom_filter(10.0, false);
 
-        db_opts.set_block_based_table_factory(&block_opts);
+        // db_opts.set_block_based_table_factory(&block_opts);
 
 
-        let db = DB::open(&db_opts, "/data/").unwrap();
+        let db = DB::open_default("/data/").unwrap();
+        // let db = DB::open(&db_opts, "/data/").unwrap();
         println!("rocksdb init successfully");
         db
     };
