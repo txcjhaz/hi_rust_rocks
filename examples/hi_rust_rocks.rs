@@ -44,43 +44,157 @@ impl HttpService for Techempower {
         }
         else if req.path().starts_with("/query/") {
             let key = &req.path()[7..];
-            let val = ROCKS.get(key);
-            let b = rsp.body_mut();
-            b.write_str(&val).unwrap(); // TODO err handle
-            // println!("key is {}, val is {}", key, val);
-            rsp.header("Content-Type: text/plain");
+            let f = ROCKS.get(key);
+
+            match f {
+                Ok(val) => {
+                    match val {
+                        Some(v) => {
+                            let str = std::str::from_utf8(&v);
+                            match str {
+                                Ok(s) => {
+                                    rsp.body_mut().write_str(s).unwrap();
+                                    rsp.header("Content-Type: text/plain");
+                                },
+                                Err(err) => {
+                                    rsp.status_code("404", "");
+                                    return Ok(());
+                                }
+                            }
+                        },
+                        None => {
+                            rsp.status_code("404", "");
+                            return Ok(());
+                        }
+                    };
+                },
+                Err(_err) => {
+                    rsp.status_code("404", "");
+                    return Ok(());
+                }
+            }
         }
         else if req.path() == "/add" {
             let r_body = req.body_();
             // println!("body is {}", std::str::from_utf8(&r_body.to_vec()).unwrap());
-            let kv: KeyValue = serde_json::from_slice(r_body).unwrap();  // FIXME 处理异常         
-            ROCKS.set(kv.key, kv.value);
+            let json_parse_resp: Result<KeyValue, serde_json::Error> = serde_json::from_slice(r_body); 
+            match json_parse_resp {
+                Ok(kv) => {
+                    let f = ROCKS.put(kv.key, kv.value);
+                    match f {
+                        Ok(()) => {},
+                        Err(_err) => {
+                            rsp.status_code("400", "");
+                            return Ok(());
+                        }
+                    }
+                },
+                Err(_err) => {
+                    rsp.status_code("400", "");
+                    return Ok(());
+                }
+            }         
             // println!("to add key is {}, value is {}", kv.key, kv.value);
         }
         else if req.path().starts_with("/del/") {
             let key = &req.path()[7..];
-            ROCKS.remove(key);
+            let f = ROCKS.delete(key);
+            match f {
+                Ok(()) => {},
+                Err(_err) => {
+                    rsp.status_code("400", "");
+                    return Ok(());
+                }
+            }
             // println!("del key is {}", key);
         }
         else if req.path() == "/list" {
             let r_body = req.body_();
-            let keys: Vec<&str> = serde_json::from_slice(r_body).unwrap();  // FIXME 处理异常         
+            let json_parse_resp: Result<Vec<&str>, serde_json::Error> = 
+                serde_json::from_slice(r_body);
             
-            let vals = ROCKS.mget(&keys);
-
-            let mut resp = Vec::<KeyValue>::new();
-            let mut i = 0;
-            while i < vals.len() {
-                let item = KeyValue {
-                    key: keys[i],
-                    value: &vals[i]
-                };
-                resp.push(item);
-                i = i + 1;
-            }
-            let resp_body = serde_json::to_string(&resp).unwrap();
             let b = rsp.body_mut();
-            b.write_str(resp_body.as_str()).unwrap(); // TODO err handle
+            match json_parse_resp {
+                Ok(keys) => {
+                    let vals = ROCKS.multi_get(keys.clone());
+                    
+                    if vals.len() == 0 {
+                        let f = b.write_str("[]");
+                        match f {
+                            Ok(()) => {},
+                            Err(_err) => {
+                                rsp.status_code("404", "");
+                                return Ok(());
+                            }
+                        }
+                        return Ok(());
+                    }
+
+                    let f = b.write_char('[');
+                    match f {
+                        Ok(()) => {},
+                        Err(_err) => {
+                            rsp.status_code("404", "");
+                            return Ok(());
+                        }
+                    }
+                    
+                    for (i, val_resp) in vals.iter().enumerate() {
+                        match val_resp {
+                            Ok(maybe_val) => {
+                                match maybe_val {
+                                    Some(val) => {
+                                        let val_str = std::str::from_utf8(val).unwrap();
+                                        let kv_str = format!("{{\"key\":\"{}\",\"value\":\"{}\"}}", keys[i], val_str);
+                                        
+                                        let f = b.write_str(&kv_str);
+                                        match f {
+                                            Ok(()) => {},
+                                            Err(_err) => {
+                                                rsp.status_code("404", "");
+                                                return Ok(());
+                                            }
+                                        }
+
+                                        if i != keys.len() {
+                                            let f = b.write_char(',');
+                                            match f {
+                                                Ok(()) => {},
+                                                Err(_err) => {
+                                                    rsp.status_code("404", "");
+                                                    return Ok(());
+                                                }
+                                            }
+                                        }
+
+                                    },
+                                    None => {
+                                        rsp.status_code("404", "");
+                                        return Ok(());
+                                    }
+                                }
+                            },
+                            Err(_err) => {
+                                rsp.status_code("404", "");
+                                return Ok(());
+                            }
+                        }
+                    }
+
+                    let f = b.write_char(']');
+                    match f {
+                        Ok(()) => {},
+                        Err(_err) => {
+                            rsp.status_code("404", "");
+                            return Ok(());
+                        }
+                    }
+                },
+                Err(_err) => {
+                    rsp.status_code("404", "");
+                    return Ok(());
+                }
+            }
 
             rsp.header("Content-Type: application/json");
         }
@@ -88,37 +202,37 @@ impl HttpService for Techempower {
             let r_body = req.body_();
             // println!("body is {}", std::str::from_utf8(&r_body.to_vec()).unwrap());
 
-            let kv: Vec<KeyValue> = serde_json::from_slice(r_body).unwrap();  // FIXME 处理异常         
-            let mut keys = Vec::new();
-            let mut vals = Vec::new();
-            for p in kv.iter() {
-                keys.push(p.key);
-                vals.push(p.value);
+            let kv_parse_rsp: Result<Vec<KeyValue>, serde_json::Error> = serde_json::from_slice(r_body); 
+            match kv_parse_rsp {
+                Ok(kvs) => {
+                    for kv in kvs {
+                        let f = ROCKS.put(kv.key, kv.value);
+                        match f {
+                            Ok(()) => {},
+                            Err(_err) => {
+                                rsp.status_code("400", "");
+                                return Ok(());
+                            }
+                        }
+                    }
+                },
+                Err(_err) => {
+                    rsp.status_code("400", "");
+                    return Ok(());
+                }
             }
-
-            ROCKS.mset(&keys, &vals);
         }
         else if req.path().starts_with("/zadd/") {
-            let key = &req.path()[6..];
-            let r_body = req.body_();
-            // println!("key is {}, body is {}", key, std::str::from_utf8(&r_body.to_vec()).unwrap());
-            let z_val: ZValue = serde_json::from_slice(r_body).unwrap();  // FIXME 处理异常
+            rsp.status_code("404", "Not Found");
 
-            ROCKS.zadd(key, z_val.value, &z_val.score);
         }
         else if req.path().starts_with("/zrange/") {
-            let key = &req.path()[8..];
-            let r_body = req.body_();
-            println!("key is {}, body is {}", key, std::str::from_utf8(&r_body.to_vec()).unwrap());
-            let z_score: ZRangeScore = serde_json::from_slice(r_body).unwrap();  // FIXME 处理异常
+            rsp.status_code("404", "Not Found");
 
-            ROCKS.zrange(key, &z_score.min_score, &&z_score.max_score);
         }
         else if req.path().starts_with("/zrmv/") {
-            let keyAndValue = &req.path()[6..];
-            let splits: Vec<&str> = keyAndValue.split('/').collect();
-            // println!("key is {}, val is {}", splits[0], splits[1]);
-            ROCKS.zrmv(splits[0], splits[1]);
+            rsp.status_code("404", "Not Found");
+
         }
         else {
             rsp.status_code("404", "Not Found");
@@ -142,20 +256,20 @@ impl HttpServiceFactory for HttpServer {
 }
 
 fn main() {
-    ROCKS.set("test", "666");
+    ROCKS.put("test", "666").unwrap();
     may::config()
         .set_pool_capacity(10000)
         .set_stack_size(0x1000);
     let http_server = HttpServer {};
-    let server = http_server.start("0.0.0.0:8081").unwrap();
+    let server = http_server.start("0.0.0.0:8080").unwrap();
     server.join().unwrap();
 }
 
 lazy_static!{
-    static ref ROCKS: RocksdbUtil = {
+    static ref ROCKS: rocksdb::DB = {
         println!("rocksdb init");
-        let db = DB::open_default("C:/Users/txcjh/Desktop/Projects/may_minihttp/storage").unwrap();
+        let db = DB::open_default("/data").unwrap();
         println!("rocksdb init successfully");
-        RocksdbUtil { db: db }
+        db
     };
 }
