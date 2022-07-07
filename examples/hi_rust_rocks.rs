@@ -118,7 +118,7 @@ impl HttpService for Techempower {
             match json_parse_resp {
                 Ok(keys) => {
                     let vals = ROCKS.multi_get(keys.clone());
-                    let mut resp = Vec::<String>::new();
+                    let mut resp = Vec::<KeyValue>::new();
                     
                     if vals.len() == 0 {
                         let f = b.write_str("[]");
@@ -138,9 +138,11 @@ impl HttpService for Techempower {
                                 match maybe_val {
                                     Some(val) => {
                                         let val_str = std::str::from_utf8(val).unwrap();
-                                        let kv_str = format!("{{\"key\":\"{}\",\"value\":\"{}\"}}", keys[i], val_str);
-                                        
-                                        resp.push(kv_str);
+                                        let kv = KeyValue {
+                                            key: keys[i],
+                                            value: val_str
+                                        };
+                                        resp.push(kv);
                                     },
                                     None => {
                                         rsp.status_code("404", "");
@@ -270,7 +272,7 @@ lazy_static!{
         // wal setting
         db_opts.set_wal_bytes_per_sync(1 << 20);
 
-        let db = DB::open_default("/data").unwrap();
+        let db = DB::open_default("data").unwrap();
         println!("rocksdb init successfully");
         db
     };
