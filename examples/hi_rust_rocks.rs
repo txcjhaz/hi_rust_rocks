@@ -256,7 +256,8 @@ fn main() {
     ROCKS.put("test", "666").unwrap();
     may::config()
         .set_pool_capacity(10000)
-        .set_stack_size(0x1000);
+        .set_stack_size(0x1000)
+        .set_workers(3);
     let http_server = HttpServer {};
     let server = http_server.start("0.0.0.0:8080").unwrap();
     server.join().unwrap();
