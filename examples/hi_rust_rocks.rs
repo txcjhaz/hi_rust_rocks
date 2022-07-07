@@ -272,7 +272,7 @@ lazy_static!{
         // wal setting
         db_opts.set_wal_bytes_per_sync(1 << 20);
 
-        let db = DB::open_default("data").unwrap();
+        let db = DB::open_default("/data").unwrap();
         println!("rocksdb init successfully");
         db
     };
