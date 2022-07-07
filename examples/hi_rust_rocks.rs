@@ -265,7 +265,7 @@ fn main() {
 lazy_static!{
     static ref ROCKS: rocksdb::DB = {
         println!("rocksdb init");
-        let db = DB::open_default("data").unwrap();
+        let db = DB::open_default("/data").unwrap();
         println!("rocksdb init successfully");
         db
     };
