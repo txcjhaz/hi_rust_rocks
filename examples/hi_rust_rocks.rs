@@ -97,7 +97,8 @@ impl HttpService for Techempower {
             // println!("to add key is {}, value is {}", kv.key, kv.value);
         }
         else if req.path().starts_with("/del/") {
-            let key = &req.path()[7..];
+            let key = &req.path()[5..];
+            // println!("del key is {}", key);
             let f = ROCKS.delete(key);
             match f {
                 Ok(()) => {},
