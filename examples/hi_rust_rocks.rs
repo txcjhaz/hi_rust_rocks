@@ -140,6 +140,7 @@ impl HttpService for Techempower {
                         }
                     }
                     
+                    let len = keys.len() - 1;
                     for (i, val_resp) in vals.iter().enumerate() {
                         match val_resp {
                             Ok(maybe_val) => {
@@ -149,6 +150,7 @@ impl HttpService for Techempower {
                                         let kv_str = format!("{{\"key\":\"{}\",\"value\":\"{}\"}}", keys[i], val_str);
                                         
                                         let f = b.write_str(&kv_str);
+
                                         match f {
                                             Ok(()) => {},
                                             Err(_err) => {
@@ -157,7 +159,7 @@ impl HttpService for Techempower {
                                             }
                                         }
 
-                                        if i != keys.len() {
+                                        if i < len  {
                                             let f = b.write_char(',');
                                             match f {
                                                 Ok(()) => {},
@@ -224,16 +226,10 @@ impl HttpService for Techempower {
             }
         }
         else if req.path().starts_with("/zadd/") {
-            rsp.status_code("404", "Not Found");
-
         }
         else if req.path().starts_with("/zrange/") {
-            rsp.status_code("404", "Not Found");
-
         }
         else if req.path().starts_with("/zrmv/") {
-            rsp.status_code("404", "Not Found");
-
         }
         else {
             rsp.status_code("404", "Not Found");
@@ -269,7 +265,7 @@ fn main() {
 lazy_static!{
     static ref ROCKS: rocksdb::DB = {
         println!("rocksdb init");
-        let db = DB::open_default("/data").unwrap();
+        let db = DB::open_default("data").unwrap();
         println!("rocksdb init successfully");
         db
     };
