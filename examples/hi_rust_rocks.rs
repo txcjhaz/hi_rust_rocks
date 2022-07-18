@@ -179,7 +179,7 @@ lazy_static!{
         Mutex::new(HashMap::with_capacity(TOTAL_SLOTS * SLOT_SIZE))
     };
 
-    static ref unlock_kv: Arc<DashMap<String, String>> = {
-        Arc::new(DashMap::with_capacity(TOTAL_SLOTS * SLOT_SIZE))
+    static ref unlock_kv: DashMap<String, String> = {
+        DashMap::with_capacity(TOTAL_SLOTS * SLOT_SIZE)
     };
 }
