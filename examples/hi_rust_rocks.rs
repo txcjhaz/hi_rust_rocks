@@ -2,7 +2,7 @@ use std::{io, fmt::Write, hash::Hash, collections::{hash_map::DefaultHasher, Has
 
 use may_minihttp::{HttpService, HttpServiceFactory, Request, Response, KvUtil, MockKvUtil, SelfKvUtil};
 use serde::{Deserialize, Serialize};
-
+use dashmap::DashMap;
 use lazy_static::lazy_static;
 
 extern crate serde;
@@ -48,8 +48,8 @@ impl HttpService for Techempower {
         }
         else if req.path().starts_with("/query/") {
             let key = &req.path()[7..];
-            if let Some(val) = KV.lock().unwrap().get(key) {
-                rsp.body_mut().write_str(val).unwrap();
+            if let Some(val) = unlock_kv.get(key) {
+                rsp.body_mut().write_str(val.as_str()).unwrap();
             } else {
                 rsp.status_code("404", "");
             }
@@ -62,15 +62,7 @@ impl HttpService for Techempower {
                 Ok(kv) => {
                     let key = unsafe { String::from_utf8_unchecked(kv.key.as_bytes().to_vec()) };
                     let val = unsafe { String::from_utf8_unchecked(kv.value.as_bytes().to_vec()) };
-                    let mut conn = KV.lock().unwrap();
-                    conn.insert(key, val);
-                    // match f {
-                    //     Some(_) => {},
-                    //     None => {
-                    //         rsp.status_code("400", "???");
-                    //         return Ok(());
-                    //     }
-                    // }
+                    unlock_kv.insert(key, val);
                 },
                 Err(_err) => {
                     rsp.status_code("400", "");
@@ -81,7 +73,7 @@ impl HttpService for Techempower {
         }
         else if req.path().starts_with("/del/") {
             let key = &req.path()[5..];
-            KV.lock().unwrap().remove(key);
+            unlock_kv.remove(key);
             // println!("del key is {}", key);
         }
         else if req.path() == "/list" {
@@ -93,10 +85,8 @@ impl HttpService for Techempower {
             match json_parse_resp {
                 Ok(keys) => {
                     let mut final_res = Vec::<KeyValueRes>::with_capacity(keys.len());
-                    let db = KV.lock().unwrap();
                     for key in keys {
-                        let t = db.get(key);
-                        if let Some(val) = db.get(key) {
+                        if let Some(val) = unlock_kv.get(key) {
                             final_res.push(KeyValueRes{
                                 key: unsafe { String::from_utf8_unchecked(key.as_bytes().to_vec()) },
                                 value: unsafe { String::from_utf8_unchecked(val.as_bytes().to_vec()) }
@@ -123,11 +113,10 @@ impl HttpService for Techempower {
             let kv_parse_rsp: Result<Vec<KeyValue>, serde_json::Error> = serde_json::from_slice(r_body); 
             match kv_parse_rsp {
                 Ok(kvs) => {
-                    let mut db = KV.lock().unwrap();
                     for kv in kvs {
                         let key = unsafe { String::from_utf8_unchecked(kv.key.as_bytes().to_vec()) };
                         let val = unsafe { String::from_utf8_unchecked(kv.value.as_bytes().to_vec()) };
-                        db.insert(key, val);
+                        unlock_kv.insert(key, val);
                     }
                 },
                 Err(_err) => {
@@ -188,5 +177,9 @@ lazy_static!{
 
     static ref KV: Mutex<HashMap<String, String>> = {
         Mutex::new(HashMap::with_capacity(TOTAL_SLOTS * SLOT_SIZE))
+    };
+
+    static ref unlock_kv: Arc<DashMap<String, String>> = {
+        Arc::new(DashMap::with_capacity(TOTAL_SLOTS * SLOT_SIZE))
     };
 }
