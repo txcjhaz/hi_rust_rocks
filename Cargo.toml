@@ -13,8 +13,6 @@ itoa = "0.4"
 bytes = "1"
 httparse = "1"
 lazy_static = "1"
-rocksdb = { git = "https://github.com/rust-rocksdb/rust-rocksdb" }
-# rusty-leveldb = "1.0.1"
 
 [dev-dependencies]
 mimalloc = "0.1"

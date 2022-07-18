@@ -1,7 +1,7 @@
-use std::{hash::Hash, collections::{hash_map::DefaultHasher, HashMap}};
+use std::{hash::{Hash, Hasher}, collections::{hash_map::DefaultHasher, HashMap}, sync::{Arc, Mutex}};
 
-use rocksdb::WriteBatch;
-
+const TOTAL_SLOTS: usize = 1024;
+const SLOT_SIZE: usize = 20000;
 pub trait KvUtil {
     fn set(&self, key: &str, value: &str);
     fn get(&self, key: &str) -> &str;
@@ -50,15 +50,16 @@ impl KvUtil for MockKvUtil {
     }
 }
 
-pub struct RocksdbUtil<'a> {
-    pub dbs: Vec<&'a rocksdb::DB>,
-    pub size: u32
+type Db = Arc<Mutex<HashMap<String, String>>>;
+
+pub struct SelfKvUtil {
+    pub dbs: Vec<Db>
 }
 
-impl RocksdbUtil<'_> {
+impl SelfKvUtil {
 
-    fn getDb(&self, key: &str) -> &rocksdb::DB {
-        let index = self.BKDRHash(key) % self.size;
+    fn get_db(&self, key: &str) -> &Db {
+        let index = self.simple_hash(key) % TOTAL_SLOTS as u32;
         let db_opt = self.dbs.get(index as usize);
         
         match db_opt {
@@ -66,13 +67,19 @@ impl RocksdbUtil<'_> {
                 return db;
             }
             None => {
-                return self.dbs[0];
+                return &self.dbs[0];
             }
         }
 
     }
 
-    fn BKDRHash(&self, str: &str) -> u32 {
+    fn simple_hash(&self, str: &str) -> u32 {
+        let mut hasher = DefaultHasher::new();
+        hasher.write(str.as_bytes());
+        hasher.finish() as u32
+    }
+
+    fn bdkr_hash(&self, str: &str) -> u32 {
         let seed: u32 = 131;
         let mut hash: u32 = 0;
 
@@ -83,90 +90,66 @@ impl RocksdbUtil<'_> {
         hash & 0x7FFFFFFF
     }
  
-    pub fn set(&self, _key: &str, _value: &str) {
-        self.getDb(_key).put(_key, _value).unwrap();
+    fn check_capacity(size: usize) -> Result<(), String> {
+        if size < SLOT_SIZE {
+            Ok(())
+        } else {
+            Err(String::from("out of capacity"))
+        }
     }
 
-    pub fn get(&self, _key: &str) -> String {
-       let s = self.getDb(_key).get(_key).unwrap().unwrap();
-       let q = String::from_utf8(s).unwrap();
-       return q;
+    pub fn set(&self, _key: &str, _value: &str) -> Result<(), String> {
+        let mut db = self.get_db(_key).lock().unwrap();
+
+        if let Ok(_) = SelfKvUtil::check_capacity(db.len() + 1) {
+            db.insert(_key.to_string(), _value.to_string());
+            return Ok(());
+        } else {
+            return Err("out of capacity".to_string());
+        }
+    }
+
+    pub fn get(&self, _key: &str) -> Option<String> {
+        let db = self.get_db(_key).lock().unwrap();
+        if let Some(val) = db.get(_key) {
+            Some((*val).clone())
+        } else {
+            None
+        }
     }
 
     pub fn remove(&self, _key: &str) {
-        self.getDb(_key).delete(_key).unwrap();
+        let mut db = self.get_db(_key).lock().unwrap();
+        db.remove(_key);
     }
 
-    pub fn mget(&self, _keys: &Vec<&str>) -> std::result::Result<&Vec<(usize, &Vec<u8>)>, &'static str> {
-        let mut key_map: HashMap<u32, Vec<&str>> = HashMap::with_capacity(self.size as usize);
-        for k in (*_keys) {
-            let slot = self.BKDRHash(k);
-            let opt = key_map.get_key_value(&slot);
-            match opt {
-                Some(v) => {
-                    let mut vec = v.1;
-                    vec.push(k);
-                },
-                None => {
-                    key_map.insert(slot, vec![k]);
-                }
+    pub fn mget(&self, _keys: &Vec<&str>) -> Result<Vec<(String, String)>, String> {
+        let mut res = Vec::new();
+
+        for _key in (*_keys).clone() {
+            let db = self.get_db(_key).lock().unwrap();
+            if let Some(val) = db.get(_key) {
+                res.push((_key.to_string(), (*val).clone()));
+            } else {
+                return Err("not found".to_string());
             }
         }
 
-        let mut mock_res = Vec::new();
-        for _key in key_map {
-            let (i, ks) = _key;
-            let db = self.dbs[i as usize];
-            let res = db.multi_get(ks);
-
-            for (i, item) in res.iter().enumerate() {
-                match item {
-                    Ok(val) => {
-                        match val {
-                            Some(v) => {
-                                mock_res.push((i, v));
-                            },
-                            None => {
-                                return Err("404");
-                            }
-                        }
-                    },
-                    Err(_err) => {
-                        return Err("404");
-                    }
-                }
-            }
-        }
-
-        return Ok(&(mock_res.clone()));
+        return Ok(res);
     }
 
-    pub fn mset(&self, kvs: &Vec<(&str, &str)>) {
-        let key_map: HashMap<u32, Vec<(&str, &str)>> = 
-            HashMap::with_capacity(self.size as usize);
-
-        for kv in kvs {
-            let slot = self.BKDRHash(kv.0);
-            let opt = key_map.get_key_value(&slot);
-            match opt {
-                Some(v) => {
-                    let mut vec = v.1;
-                    vec.push(*kv);
-                },
-                None => {
-                    key_map.insert(slot, vec![*kv]);
-                }
+    pub fn mset(&self, kvs: &Vec<(&str, &str)>) -> Result<(), String> {
+        for kv in (*kvs).clone() {
+            let mut db = self.get_db(kv.0).lock().unwrap();
+            
+            if let Ok(_) = SelfKvUtil::check_capacity(db.len() + 1) {
+                db.insert(kv.0.to_string(), kv.1.to_string());
+            } else {
+                return Err("out of capacity".to_string());
             }
         }
 
-        for _key in key_map {
-            let db = self.dbs[_key.0 as usize];
-            let mut batch = WriteBatch::default();
-            for t in _key.1 {
-                batch.put(t.0, t.1);
-            }
-            db.write(batch);
-        }
+        Ok(())
     }
 
     pub fn zadd(&self, _key: &str, _val: &str, _score: &u32) {

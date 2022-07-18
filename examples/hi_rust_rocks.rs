@@ -1,24 +1,21 @@
-use std::{io, fmt::Write};
+use std::{io, fmt::Write, hash::Hash, collections::{hash_map::DefaultHasher, HashMap}, sync::{Arc, Mutex}};
 
-use may_minihttp::{HttpService, HttpServiceFactory, Request, Response, KvUtil, MockKvUtil, RocksdbUtil};
-use rocksdb::DB;
+use may_minihttp::{HttpService, HttpServiceFactory, Request, Response, KvUtil, MockKvUtil, SelfKvUtil};
 use serde::{Deserialize, Serialize};
 
 use lazy_static::lazy_static;
 
 extern crate serde;
 
-// #[derive(Serialize)]
-// struct HeloMessage {
-//     message: &'static str,
-// }
+const TOTAL_SLOTS: usize = 1024;
+const SLOT_SIZE: usize = 20000;
 
 struct Techempower {}
 
 #[derive(Deserialize, Serialize, Debug)]
-struct KeyValue<'a> {
-    key: &'a str,
-    value: &'a str
+struct KeyValue {
+    key: String,
+    value: String
 }
 
 #[derive(Deserialize, Serialize, Debug)]
@@ -44,163 +41,97 @@ impl HttpService for Techempower {
         }
         else if req.path().starts_with("/query/") {
             let key = &req.path()[7..];
-            let f = ROCKS.get(key);
-
-            match f {
-                Ok(val) => {
-                    match val {
-                        Some(v) => {
-                            let str = std::str::from_utf8(&v);
-                            match str {
-                                Ok(s) => {
-                                    rsp.body_mut().write_str(s).unwrap();
-                                    rsp.header("Content-Type: text/plain");
-                                },
-                                Err(err) => {
-                                    rsp.status_code("404", "");
-                                    return Ok(());
-                                }
-                            }
-                        },
-                        None => {
-                            rsp.status_code("404", "");
+            if let Some(val) = KVs.get(key) {
+                rsp.body_mut().write_str(&val).unwrap();
+            } else {
+                rsp.status_code("404", "");
+            }
+        }
+        else if req.path() == "/add" {
+            let r_body = req.body_();
+            // println!("body is {}", std::str::from_utf8(&r_body.to_vec()).unwrap());
+            let json_parse_resp: Result<KeyValue, serde_json::Error> = serde_json::from_slice(r_body); 
+            match json_parse_resp {
+                Ok(kv) => {
+                    let f = KVs.set(&kv.key, &kv.value);
+                    match f {
+                        Ok(()) => {},
+                        Err(_err) => {
+                            rsp.status_code("400", "");
                             return Ok(());
                         }
-                    };
+                    }
                 },
                 Err(_err) => {
-                    rsp.status_code("404", "");
+                    rsp.status_code("400", "");
+                    return Ok(());
+                }
+            }         
+            // println!("to add key is {}, value is {}", kv.key, kv.value);
+        }
+        else if req.path().starts_with("/del/") {
+            let key = &req.path()[5..];
+            KVs.remove(key);
+            // println!("del key is {}", key);
+        }
+        else if req.path() == "/list" {
+            let r_body = req.body_();
+            let json_parse_resp: Result<Vec<&str>, serde_json::Error> = 
+                serde_json::from_slice(r_body);
+            
+            let b = rsp.body_mut();
+            match json_parse_resp {
+                Ok(keys) => {
+                    let res = KVs.mget(&keys);
+                    match res {
+                        Ok(vals) => {
+                            let mut final_res = Vec::<KeyValue>::with_capacity(vals.len());
+                            for val in vals {
+                                final_res.push(KeyValue{
+                                    key: val.0,
+                                    value: val.1
+                                });
+                            }
+                            let body_mut = rsp.body_mut();
+                            let r = serde_json::to_string(&final_res).unwrap();
+                            body_mut.write_str(&r).unwrap();
+                        },
+                        Err(_) => {
+                            rsp.status_code("400", "");
+                        }
+                    }
+            
+                },
+                Err(_err) => {
+                    rsp.status_code("400", "");
+                }
+            }
+            return Ok(());
+        }
+        else if req.path() == "/batch" {
+            let r_body = req.body_();
+            // println!("body is {}", std::str::from_utf8(&r_body.to_vec()).unwrap());
+
+            let kv_parse_rsp: Result<Vec<KeyValue>, serde_json::Error> = serde_json::from_slice(r_body); 
+            match kv_parse_rsp {
+                Ok(kvs) => {
+                    for kv in kvs {
+                        let f = KVs.set(&kv.key, &kv.value);
+                        match f {
+                            Ok(()) => {},
+                            Err(_err) => {
+                                rsp.status_code("400", "");
+                                return Ok(());
+                            }
+                        }
+                    }
+                },
+                Err(_err) => {
+                    rsp.status_code("400", "");
                     return Ok(());
                 }
             }
         }
-        // else if req.path() == "/add" {
-        //     let r_body = req.body_();
-        //     // println!("body is {}", std::str::from_utf8(&r_body.to_vec()).unwrap());
-        //     let json_parse_resp: Result<KeyValue, serde_json::Error> = serde_json::from_slice(r_body); 
-        //     match json_parse_resp {
-        //         Ok(kv) => {
-        //             let f = ROCKS.put(kv.key, kv.value);
-        //             match f {
-        //                 Ok(()) => {},
-        //                 Err(_err) => {
-        //                     rsp.status_code("400", "");
-        //                     return Ok(());
-        //                 }
-        //             }
-        //         },
-        //         Err(_err) => {
-        //             rsp.status_code("400", "");
-        //             return Ok(());
-        //         }
-        //     }         
-        //     // println!("to add key is {}, value is {}", kv.key, kv.value);
-        // }
-        // else if req.path().starts_with("/del/") {
-        //     let key = &req.path()[5..];
-        //     // println!("del key is {}", key);
-        //     let f = ROCKS.delete(key);
-        //     match f {
-        //         Ok(()) => {},
-        //         Err(_err) => {
-        //             rsp.status_code("400", "");
-        //             return Ok(());
-        //         }
-        //     }
-        //     // println!("del key is {}", key);
-        // }
-        // else if req.path() == "/list" {
-        //     let r_body = req.body_();
-        //     let json_parse_resp: Result<Vec<&str>, serde_json::Error> = 
-        //         serde_json::from_slice(r_body);
-            
-        //     let b = rsp.body_mut();
-        //     match json_parse_resp {
-        //         Ok(keys) => {
-        //             let vals = ROCKS.multi_get(keys.clone());
-        //             let mut resp = Vec::<KeyValue>::new();
-                    
-        //             if vals.len() == 0 {
-        //                 let f = b.write_str("[]");
-        //                 match f {
-        //                     Ok(()) => {},
-        //                     Err(_err) => {
-        //                         rsp.status_code("404", "");
-        //                         return Ok(());
-        //                     }
-        //                 }
-        //                 return Ok(());
-        //             }
-
-        //             for (i, val_resp) in vals.iter().enumerate() {
-        //                 match val_resp {
-        //                     Ok(maybe_val) => {
-        //                         match maybe_val {
-        //                             Some(val) => {
-        //                                 let val_str = std::str::from_utf8(val).unwrap();
-        //                                 let kv = KeyValue {
-        //                                     key: keys[i],
-        //                                     value: val_str
-        //                                 };
-        //                                 resp.push(kv);
-        //                             },
-        //                             None => {
-        //                                 rsp.status_code("404", "");
-        //                                 return Ok(());
-        //                             }
-        //                         }
-        //                     },
-        //                     Err(_err) => {
-        //                         rsp.status_code("404", "");
-        //                         return Ok(());
-        //                     }
-        //                 }
-        //             }
-
-        //             let json_str_resp = serde_json::to_string(&resp);
-        //             match json_str_resp {
-        //                 Ok(s) => {
-        //                     b.write_str(&s).unwrap();
-        //                     rsp.header("Content-Type: application/json");
-        //                     return Ok(());
-        //                 },
-        //                 Err(_err) => {
-        //                     rsp.status_code("404", "");
-        //                     return Ok(());
-        //                 }
-        //             }
-        //         },
-        //         Err(_err) => {
-        //             rsp.status_code("404", "");
-        //             return Ok(());
-        //         }
-        //     }
-        //     return Ok(());
-        // }
-        // else if req.path() == "/batch" {
-        //     let r_body = req.body_();
-        //     // println!("body is {}", std::str::from_utf8(&r_body.to_vec()).unwrap());
-
-        //     let kv_parse_rsp: Result<Vec<KeyValue>, serde_json::Error> = serde_json::from_slice(r_body); 
-        //     match kv_parse_rsp {
-        //         Ok(kvs) => {
-        //             for kv in kvs {
-        //                 let f = ROCKS.put(kv.key, kv.value);
-        //                 match f {
-        //                     Ok(()) => {},
-        //                     Err(_err) => {
-        //                         rsp.status_code("400", "");
-        //                         return Ok(());
-        //                     }
-        //                 }
-        //             }
-        //         },
-        //         Err(_err) => {
-        //             rsp.status_code("400", "");
-        //             return Ok(());
-        //         }
-        //     }
-        // }
         else if req.path().starts_with("/zadd/") {
         }
         else if req.path().starts_with("/zrange/") {
@@ -229,7 +160,6 @@ impl HttpServiceFactory for HttpServer {
 }
 
 fn main() {
-    ROCKS.put("test", "666").unwrap();
     may::config()
         .set_pool_capacity(10000)
         .set_stack_size(0x1000)
@@ -239,58 +169,14 @@ fn main() {
     server.join().unwrap();
 }
 
-
-fn init_rocksdb(path: &str) -> rocksdb::DB {
-    println!("rocksdb init, path is {}", path);
-
-    let mut db_opts = rocksdb::Options::default();
-
-    // use direct io (cannot use with mmap at the same time)
-    db_opts.set_use_direct_reads(true);
-    db_opts.set_use_direct_io_for_flush_and_compaction(true);
-    db_opts.set_compaction_readahead_size(2 << 20);
-    db_opts.set_writable_file_max_buffer_size(1 << 20);
-
-    // block cache setting
-    let mut block_cache_opts = rocksdb::BlockBasedOptions::default();
-    let lru_cache = rocksdb::Cache::new_lru_cache(5 << 30).unwrap();
-    block_cache_opts.set_block_cache(&lru_cache);
-    block_cache_opts.set_bloom_filter(10.0, false);
-    block_cache_opts.set_block_size(16 << 10);
-    block_cache_opts.set_cache_index_and_filter_blocks(true);
-    block_cache_opts.set_pin_l0_filter_and_index_blocks_in_cache(true);
-    block_cache_opts.set_format_version(5);
-    db_opts.set_block_based_table_factory(&block_cache_opts);
-
-    // rate limiter setting, usually change first param
-    db_opts.set_ratelimiter(1 << 20, 100 * 1000, 10);
-
-    // general opt
-    db_opts.set_max_background_jobs(2);
-    db_opts.set_bytes_per_sync(1 << 20);
-
-    // wal setting
-    db_opts.set_wal_bytes_per_sync(1 << 20);
-
-    let db = DB::open_default("data").unwrap();
-    println!("rocksdb init successfully, path is {}", path);
-    db
-}
-
 lazy_static!{
-    static ref ROCKS = {
-        let db1 = init_rocksdb('data1');
-        let db2 = init_rocksdb('data2');
-        let db3 = init_rocksdb('data3');
-        let db4 = init_rocksdb('data4');
-        db1.put("test", "value");
-        db2.put("test", "value");
-        db3.put("test", "value");
-        db4.put("test", "value");
-
-        RocksdbUtil {
-            dbs: vec![db1, db2, db3, db4],
-            size: 4
+    static ref KVs: SelfKvUtil = {
+        let mut kv_wrap = Vec::<Arc<Mutex<HashMap<String, String>>>>::with_capacity(TOTAL_SLOTS);
+        for i in 0..TOTAL_SLOTS {
+            kv_wrap.push(Arc::new(Mutex::new( HashMap::<String, String>::with_capacity(SLOT_SIZE))));
         }
+        let kvs = SelfKvUtil { dbs: kv_wrap };
+
+        kvs
     };
 }

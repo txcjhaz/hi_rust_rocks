@@ -11,5 +11,5 @@ mod service;
 pub use http_server::{HttpServer, HttpService, HttpServiceFactory};
 pub use request::Request;
 pub use response::{BodyWriter, Response};
-pub use kv_util::{KvUtil, MockKvUtil, RocksdbUtil};
+pub use kv_util::{KvUtil, MockKvUtil, SelfKvUtil};
 pub use service::HiRustRocksService;
