@@ -59,8 +59,9 @@ pub struct SelfKvUtil {
 impl SelfKvUtil {
 
     fn get_db(&self, key: &str) -> &Db {
-        let index = self.simple_hash(key) % TOTAL_SLOTS as u32;
-        let db_opt = self.dbs.get(index as usize);
+        // let index = self.simple_hash(key) % TOTAL_SLOTS as u32;
+        let index = key.len();
+        let db_opt = self.dbs.get(index);
         
         match db_opt {
             Some(db) => {
@@ -91,11 +92,13 @@ impl SelfKvUtil {
     }
  
     fn check_capacity(size: usize) -> Result<(), String> {
-        if size < SLOT_SIZE {
-            Ok(())
-        } else {
-            Err(String::from("out of capacity"))
-        }
+        Ok(())
+
+        // if size < SLOT_SIZE {
+        //     Ok(())
+        // } else {
+        //     Err(String::from("out of capacity"))
+        // }
     }
 
     pub fn set(&self, _key: &str, _value: &str) -> Result<(), String> {
