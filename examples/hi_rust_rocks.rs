@@ -153,7 +153,7 @@ impl HttpServiceFactory for HttpServer {
 }
 
 fn main() {
-    KV.lock().unwrap().insert("llll".to_string(), "我是第一个卖报的小画家".to_string());
+    unlock_kv.insert("llll".to_string(), "我是第一个卖报的小画家".to_string());
 
     may::config()
         .set_pool_capacity(10000)
