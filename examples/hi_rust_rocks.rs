@@ -9,7 +9,7 @@ use core::hash::BuildHasher;
 
 extern crate serde;
 
-const TOTAL_SLOTS: usize = 1 << 12;
+const TOTAL_SLOTS: usize = 1 << 5;
 const SLOT_SIZE: usize = 20000;
 
 struct Techempower {}
@@ -160,7 +160,7 @@ fn main() {
     dash_map.insert("llll".to_string(), "我是第一个卖报的小画家".to_string());
 
     may::config()
-        .set_pool_capacity(5000)
+        .set_pool_capacity(10000)
         .set_stack_size(0x1000)
         .set_workers(4);
 
