@@ -1,9 +1,11 @@
-use std::{io, fmt::Write, hash::Hash, collections::{hash_map::DefaultHasher, HashMap}, sync::{Arc, Mutex}};
+use std::{io, fmt::Write, collections::{HashMap, hash_map::RandomState}, sync::{Arc, Mutex}};
 
-use may_minihttp::{HttpService, HttpServiceFactory, Request, Response, KvUtil, MockKvUtil, SelfKvUtil};
+use may_minihttp::{HttpService, HttpServiceFactory, Request, Response, SelfKvUtil};
 use serde::{Deserialize, Serialize};
 use dashmap::DashMap;
 use lazy_static::lazy_static;
+use core::hash::BuildHasher;
+
 
 extern crate serde;
 
@@ -48,7 +50,7 @@ impl HttpService for Techempower {
         }
         else if req.path().starts_with("/query/") {
             let key = &req.path()[7..];
-            if let Some(val) = unlock_kv.get(key) {
+            if let Some(val) = dash_map.get(key) {
                 rsp.body_mut().write_str(val.as_str()).unwrap();
             } else {
                 rsp.status_code("404", "");
@@ -62,7 +64,7 @@ impl HttpService for Techempower {
                 Ok(kv) => {
                     let key = unsafe { String::from_utf8_unchecked(kv.key.as_bytes().to_vec()) };
                     let val = unsafe { String::from_utf8_unchecked(kv.value.as_bytes().to_vec()) };
-                    unlock_kv.insert(key, val);
+                    dash_map.insert(key, val);
                 },
                 Err(_err) => {
                     rsp.status_code("400", "");
@@ -73,7 +75,7 @@ impl HttpService for Techempower {
         }
         else if req.path().starts_with("/del/") {
             let key = &req.path()[5..];
-            unlock_kv.remove(key);
+            dash_map.remove(key);
             // println!("del key is {}", key);
         }
         else if req.path() == "/list" {
@@ -86,7 +88,7 @@ impl HttpService for Techempower {
                 Ok(keys) => {
                     let mut final_res = Vec::<KeyValueRes>::with_capacity(keys.len());
                     for key in keys {
-                        if let Some(val) = unlock_kv.get(key) {
+                        if let Some(val) = dash_map.get(key) {
                             final_res.push(KeyValueRes{
                                 key: unsafe { String::from_utf8_unchecked(key.as_bytes().to_vec()) },
                                 value: unsafe { String::from_utf8_unchecked(val.as_bytes().to_vec()) }
@@ -116,7 +118,7 @@ impl HttpService for Techempower {
                     for kv in kvs {
                         let key = unsafe { String::from_utf8_unchecked(kv.key.as_bytes().to_vec()) };
                         let val = unsafe { String::from_utf8_unchecked(kv.value.as_bytes().to_vec()) };
-                        unlock_kv.insert(key, val);
+                        dash_map.insert(key, val);
                     }
                 },
                 Err(_err) => {
@@ -139,8 +141,7 @@ impl HttpService for Techempower {
     }
 }
 
-struct HttpServer {
-}
+struct HttpServer {}
 
 impl HttpServiceFactory for HttpServer {
     type Service = Techempower;
@@ -152,17 +153,31 @@ impl HttpServiceFactory for HttpServer {
 
 }
 
+
+
 fn main() {
-    unlock_kv.insert("llll".to_string(), "我是第一个卖报的小画家".to_string());
+
+    dash_map.insert("llll".to_string(), "我是第一个卖报的小画家".to_string());
 
     may::config()
         .set_pool_capacity(10000)
         .set_stack_size(0x1000)
         .set_workers(1);
+
+    // let buildhasher = SelfBuilder{};
+
+    // let map: Arc<DashMap<String, String, SelfBuilder>> = Arc::new(DashMap::with_capacity_and_hasher_and_shard_amount(16<<10/100/4, buildhasher, 4));
+    // map.insert("key".to_string(), "value".to_string());
+
+
     let http_server = HttpServer {};
     let server = http_server.start("0.0.0.0:8080").unwrap();
+
     server.join().unwrap();
 }
+// pub fn func<S: fnv::FnvBuildHasher>(map: DashMap<String, String, S>) {}
+
+
 
 lazy_static!{
     static ref KVs: SelfKvUtil = {
@@ -182,4 +197,27 @@ lazy_static!{
     static ref unlock_kv: DashMap<String, String> = {
         DashMap::with_capacity(TOTAL_SLOTS * SLOT_SIZE)
     };
+
+    
+    static ref dash_map: DashMap<String, String, fnv::FnvBuildHasher> = {
+        DashMap::<String, String, fnv::FnvBuildHasher>::with_capacity_and_hasher_and_shard_amount(14<<30/100/TOTAL_SLOTS, fnv::FnvBuildHasher::default(), TOTAL_SLOTS)
+    };
+
+}
+
+
+struct SelfBuilder{
+    
+}
+impl BuildHasher for SelfBuilder{
+    type Hasher = fnv::FnvHasher;
+    fn build_hasher(&self) -> Self::Hasher {
+        // todo!()
+        fnv::FnvHasher::default()
+    }
+}
+impl Clone for SelfBuilder {
+    fn clone(&self) -> Self {
+        Self {  }
+    }
 }
