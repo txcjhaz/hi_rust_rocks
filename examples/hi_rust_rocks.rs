@@ -9,7 +9,7 @@ use core::hash::BuildHasher;
 
 extern crate serde;
 
-const TOTAL_SLOTS: usize = 1024;
+const TOTAL_SLOTS: usize = 1 << 12;
 const SLOT_SIZE: usize = 20000;
 
 struct Techempower {}
@@ -162,7 +162,7 @@ fn main() {
     may::config()
         .set_pool_capacity(10000)
         .set_stack_size(0x1000)
-        .set_workers(3);
+        .set_workers(4);
 
     // let buildhasher = SelfBuilder{};
 
