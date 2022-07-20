@@ -1,5 +1,6 @@
-use std::{io, fmt::Write, collections::{HashMap, hash_map::RandomState}, sync::{Arc, Mutex}};
+use std::{io, fmt::Write, collections::{HashMap, hash_map::RandomState}, sync::{Arc, Mutex}, hash::Hash};
 
+use bytes::{Bytes, BufMut};
 use may_minihttp::{HttpService, HttpServiceFactory, Request, Response, SelfKvUtil};
 use serde::{Deserialize, Serialize};
 use dashmap::DashMap;
@@ -50,8 +51,8 @@ impl HttpService for Techempower {
         }
         else if req.path().starts_with("/query/") {
             let key = &req.path()[7..];
-            if let Some(val) = dash_map.get(key) {
-                rsp.body_mut().write_str(val.as_str()).unwrap();
+            if let Some(val) = bytes_hash_map.get(key) {
+                rsp.body_mut().put(val.as_ref());
             } else {
                 rsp.status_code("404", "");
             }
@@ -63,8 +64,8 @@ impl HttpService for Techempower {
             match json_parse_resp {
                 Ok(kv) => {
                     let key = unsafe { String::from_utf8_unchecked(kv.key.as_bytes().to_vec()) };
-                    let val = unsafe { String::from_utf8_unchecked(kv.value.as_bytes().to_vec()) };
-                    dash_map.insert(key, val);
+                    let val = Bytes::from(kv.value.to_owned());
+                    bytes_hash_map.insert(key, val);
                 },
                 Err(_err) => {
                     rsp.status_code("400", "");
@@ -75,7 +76,7 @@ impl HttpService for Techempower {
         }
         else if req.path().starts_with("/del/") {
             let key = &req.path()[5..];
-            dash_map.remove(key);
+            bytes_hash_map.remove(key);
             // println!("del key is {}", key);
         }
         else if req.path() == "/list" {
@@ -88,10 +89,10 @@ impl HttpService for Techempower {
                 Ok(keys) => {
                     let mut final_res = Vec::<KeyValueRes>::with_capacity(keys.len());
                     for key in keys {
-                        if let Some(val) = dash_map.get(key) {
+                        if let Some(val) = bytes_hash_map.get(key) {
                             final_res.push(KeyValueRes{
                                 key: unsafe { String::from_utf8_unchecked(key.as_bytes().to_vec()) },
-                                value: unsafe { String::from_utf8_unchecked(val.as_bytes().to_vec()) }
+                                value: unsafe { String::from_utf8_unchecked(val.as_ref().to_vec()) }
                             });
                         } else {
                             rsp.status_code("404", "");
@@ -117,8 +118,8 @@ impl HttpService for Techempower {
                 Ok(kvs) => {
                     for kv in kvs {
                         let key = unsafe { String::from_utf8_unchecked(kv.key.as_bytes().to_vec()) };
-                        let val = unsafe { String::from_utf8_unchecked(kv.value.as_bytes().to_vec()) };
-                        dash_map.insert(key, val);
+                        let val = Bytes::from(kv.value.to_owned());
+                        bytes_hash_map.insert(key, val);
                     }
                 },
                 Err(_err) => {
@@ -157,7 +158,7 @@ impl HttpServiceFactory for HttpServer {
 
 fn main() {
 
-    dash_map.insert("llll".to_string(), "我是第一个卖报的小画家".to_string());
+    bytes_hash_map.insert("llll".to_string(), Bytes::from("我是第一个卖报的小画家"));
 
     may::config()
         .set_pool_capacity(10000)
@@ -198,9 +199,12 @@ lazy_static!{
         DashMap::with_capacity(TOTAL_SLOTS * SLOT_SIZE)
     };
 
-    
     static ref dash_map: DashMap<String, String, fnv::FnvBuildHasher> = {
         DashMap::<String, String, fnv::FnvBuildHasher>::with_capacity_and_hasher_and_shard_amount(14<<30/100/TOTAL_SLOTS, fnv::FnvBuildHasher::default(), TOTAL_SLOTS)
+    };
+
+    static ref bytes_hash_map: DashMap<String, Bytes, fnv::FnvBuildHasher> = {
+        DashMap::<String, Bytes, fnv::FnvBuildHasher>::with_capacity_and_hasher_and_shard_amount(14<<30/100/TOTAL_SLOTS, fnv::FnvBuildHasher::default(), TOTAL_SLOTS)
     };
 
 }
