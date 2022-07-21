@@ -126,6 +126,13 @@ impl HttpService for Techempower {
                     for kv in kvs {
                         let key = unsafe { String::from_utf8_unchecked(kv.key.as_bytes().to_vec()) };
                         let val = Bytes::from(kv.value.to_owned());
+
+                        let mut bytes = bytes::BytesMut::with_capacity(key.len() + val.len() + 2);
+                        bytes.write_str(&key);
+                        bytes.write_char(',');
+                        bytes.write_str(kv.value);
+                        bytes.write_char('\n');
+                        aof(bytes);
                         bytes_hash_map.insert(key, val);
                     }
                 },
