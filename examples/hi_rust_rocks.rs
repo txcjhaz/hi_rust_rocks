@@ -1,6 +1,7 @@
-use std::{io, fmt::Write, collections::{HashMap, hash_map::RandomState}, sync::{Arc, Mutex}, hash::Hash};
+use std::{ fmt::Write, collections::{HashMap, hash_map::RandomState}, sync::{Arc, Mutex}, hash::Hash, io::{self, Read}, fs::OpenOptions};
 
-use bytes::{Bytes, BufMut};
+use bytes::{Bytes, BufMut, BytesMut};
+use log::info;
 use may_minihttp::{HttpService, HttpServiceFactory, Request, Response, SelfKvUtil};
 use serde::{Deserialize, Serialize};
 use dashmap::DashMap;
@@ -65,6 +66,12 @@ impl HttpService for Techempower {
                 Ok(kv) => {
                     let key = unsafe { String::from_utf8_unchecked(kv.key.as_bytes().to_vec()) };
                     let val = Bytes::from(kv.value.to_owned());
+                    let mut bytes = bytes::BytesMut::with_capacity(key.len() + val.len() + 2);
+                    bytes.write_str(&key);
+                    bytes.write_char(',');
+                    bytes.write_str(kv.value);
+                    bytes.write_char('\n');
+                    aof(bytes);
                     bytes_hash_map.insert(key, val);
                 },
                 Err(_err) => {
@@ -157,13 +164,22 @@ impl HttpServiceFactory for HttpServer {
 
 
 fn main() {
+    // init aof
+    if let Ok(file) = std::fs::File::open("aof.csv") {}
+    else {
+        info!("aof file not exist, try to create.");
+        std::fs::File::create("aof.csv");
+    } 
 
-    bytes_hash_map.insert("llll".to_string(), Bytes::from("我是第一个卖报的小画家"));
+    // load aof data
+    load_aof_file();
+
+    // bytes_hash_map.insert("llll".to_string(), Bytes::from("我是第一个卖报的小画家"));
 
     may::config()
         .set_pool_capacity(10000)
         .set_stack_size(0x1000)
-        .set_workers(6);
+        .set_workers(8);
 
     // let buildhasher = SelfBuilder{};
 
@@ -223,5 +239,30 @@ impl BuildHasher for SelfBuilder{
 impl Clone for SelfBuilder {
     fn clone(&self) -> Self {
         Self {  }
+    }
+}
+
+ fn aof(bytes: BytesMut) {
+    use std::io::Write;
+    let mut file =  OpenOptions::new().append(true).open("aof.csv").unwrap();
+    file.write_all(bytes.as_ref()).unwrap();
+}
+
+fn load_aof_file() {
+    let mut file = std::fs::File::open("aof.csv").unwrap();
+    let mut contents = String::new();
+    file.read_to_string(&mut contents).unwrap();
+    let kvs: Vec<&str> = contents.split('\n').collect();
+    for kv in kvs {
+        let tmp: Vec<&str> = kv.split(',').collect();
+
+        if tmp.len() == 2 {
+            let key = String::from_utf8(tmp[0].as_bytes().to_vec()).unwrap();
+            let val = tmp[1];
+            let mut val_bytes = BytesMut::with_capacity(val.len());
+            val_bytes.write_str(val);
+            
+            bytes_hash_map.insert(key, Bytes::from(val_bytes));
+        }
     }
 }
