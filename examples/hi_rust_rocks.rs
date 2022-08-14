@@ -1,13 +1,13 @@
-use std::{ fmt::Write, collections::{HashMap, hash_map::RandomState}, sync::{Arc, Mutex}, hash::Hash, io::{self, Read}, fs::OpenOptions};
+use std::{ fmt::Write, collections::{HashMap, hash_map::RandomState}, sync::{Arc, Mutex}, hash::{Hash, Hasher}, io::{self, Read}, fs::OpenOptions};
 
 use bytes::{Bytes, BufMut, BytesMut};
-use log::info;
+use log::{info, debug};
 use may_minihttp::{HttpService, HttpServiceFactory, Request, Response, SelfKvUtil};
 use serde::{Deserialize, Serialize};
 use dashmap::DashMap;
 use lazy_static::lazy_static;
 use core::hash::BuildHasher;
-
+use lru::LruCache;
 
 extern crate serde;
 
@@ -23,24 +23,31 @@ struct KeyValue<'a> {
 }
 
 #[derive(Deserialize, Serialize, Debug)]
-
-struct KeyValueRes {
-    key: String,
+struct KeyValueRes<'a> {
+    key: &'a str,
     value: String
 }
 
-#[derive(Deserialize, Serialize, Debug)]
-struct ZValue<'a> {
+
+#[derive(Deserialize, Serialize, Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
+struct ScoreValue {
     score: u32,
-    value: &'a str
+    value: String,
 }
 
+
 #[derive(Deserialize, Serialize, Debug)]
-struct ZRangeScore {
+struct ZRange {
     min_score: u32,
     max_score: u32
 }
 
+
+const MEM_USED: usize = 14 << 30;
+const SHARD_SIZE: usize = 256;
+const SHARD_SIZE_64: u64 = SHARD_SIZE as u64;
+const KV_MAX_SIZE: usize = 200;
+const SHARD_CAPACITY: usize = MEM_USED / SHARD_SIZE / KV_MAX_SIZE;
 
 
 impl HttpService for Techempower {
@@ -52,7 +59,7 @@ impl HttpService for Techempower {
         }
         else if req.path().starts_with("/query/") {
             let key = &req.path()[7..];
-            if let Some(val) = bytes_hash_map.get(key) {
+            if let Some(val) = SHARDED_LRU.get(key) {
                 rsp.body_mut().put(val.as_ref());
             } else {
                 rsp.status_code("404", "");
@@ -64,15 +71,7 @@ impl HttpService for Techempower {
             let json_parse_resp: Result<KeyValue, serde_json::Error> = serde_json::from_slice(r_body); 
             match json_parse_resp {
                 Ok(kv) => {
-                    let key = unsafe { String::from_utf8_unchecked(kv.key.as_bytes().to_vec()) };
-                    let val = Bytes::from(kv.value.to_owned());
-                    let mut bytes = bytes::BytesMut::with_capacity(key.len() + val.len() + 2);
-                    bytes.write_str(&key);
-                    bytes.write_char(',');
-                    bytes.write_str(kv.value);
-                    bytes.write_char('\n');
-                    aof(bytes);
-                    bytes_hash_map.insert(key, val);
+                    SHARDED_LRU.set(kv.key, kv.value);
                 },
                 Err(_err) => {
                     rsp.status_code("400", "");
@@ -83,7 +82,7 @@ impl HttpService for Techempower {
         }
         else if req.path().starts_with("/del/") {
             let key = &req.path()[5..];
-            bytes_hash_map.remove(key);
+            SHARDED_LRU.remove(key);
             // println!("del key is {}", key);
         }
         else if req.path() == "/list" {
@@ -96,10 +95,10 @@ impl HttpService for Techempower {
                 Ok(keys) => {
                     let mut final_res = Vec::<KeyValueRes>::with_capacity(keys.len());
                     for key in keys {
-                        if let Some(val) = bytes_hash_map.get(key) {
+                        if let Some(val) = SHARDED_LRU.get(key) {
                             final_res.push(KeyValueRes{
-                                key: unsafe { String::from_utf8_unchecked(key.as_bytes().to_vec()) },
-                                value: unsafe { String::from_utf8_unchecked(val.as_ref().to_vec()) }
+                                key: key,
+                                value: String::from_utf8(val.to_vec()).unwrap()
                             });
                         } else {
                             rsp.status_code("404", "");
@@ -124,16 +123,7 @@ impl HttpService for Techempower {
             match kv_parse_rsp {
                 Ok(kvs) => {
                     for kv in kvs {
-                        let key = unsafe { String::from_utf8_unchecked(kv.key.as_bytes().to_vec()) };
-                        let val = Bytes::from(kv.value.to_owned());
-
-                        let mut bytes = bytes::BytesMut::with_capacity(key.len() + val.len() + 2);
-                        bytes.write_str(&key);
-                        bytes.write_char(',');
-                        bytes.write_str(kv.value);
-                        bytes.write_char('\n');
-                        aof(bytes);
-                        bytes_hash_map.insert(key, val);
+                        SHARDED_LRU.set(kv.key, kv.value);
                     }
                 },
                 Err(_err) => {
@@ -143,10 +133,53 @@ impl HttpService for Techempower {
             }
         }
         else if req.path().starts_with("/zadd/") {
+            let key = &req.path()[6..];
+            let data: Result<ScoreValue, serde_json::Error> = serde_json::from_slice(req.body_());
+            match data {
+                Ok(score_value) => {
+                    debug!("key is {}, value is {}", key, score_value.value);
+                    SHARDED_LRU_ZSET.zadd(&key, score_value.clone());
+                }
+                Err(_) => {
+                    rsp.status_code("400", "");
+                    return Ok(());
+                }
+            }
         }
         else if req.path().starts_with("/zrange/") {
+            let key = &req.path()[8..];
+            let data: Result<ZRange, serde_json::Error> = serde_json::from_slice(req.body_());
+                    match data {
+                        Ok(zrange) => {
+                            debug!("key is {}, min_score is {}", key, zrange.min_score);
+                            let res = SHARDED_LRU_ZSET.zrange(&key, zrange);
+
+                            if res.is_none() {
+                                rsp.status_code("404", "");
+                                return Ok(());
+                            }
+
+                            let str = serde_json::to_string(&res);
+                            match str {
+                                Ok(x) => {
+                                    rsp.body_mut().write_str(&x);
+                                },
+                                Err(_) => {
+                                    rsp.status_code("400", "");
+                                    return Ok(());
+                                }
+                            }
+                            return Ok(());
+                        }
+                        Err(_) => {}
+                    }
+
         }
         else if req.path().starts_with("/zrmv/") {
+            let caps = P_ZRM_REGEX.captures(&req.path().as_bytes()).unwrap().unwrap();
+            let key = std::str::from_utf8(&caps["key"]).unwrap();
+            let value = std::str::from_utf8(&caps["value"]).unwrap();
+            SHARDED_LRU_ZSET.zrmv(key, value);
         }
         else {
             rsp.status_code("404", "Not Found");
@@ -178,15 +211,14 @@ fn main() {
         std::fs::File::create("aof.csv");
     } 
 
-    // load aof data
-    load_aof_file();
-
-    // bytes_hash_map.insert("llll".to_string(), Bytes::from("我是第一个卖报的小画家"));
+    // init cache
+    SHARDED_LRU.set_unsave("llll", "我是卖报的小画家");
+    SHARDED_LRU_ZSET.zadd("llll", ScoreValue{ score: 2, value: "我是卖报的小画家".to_string() });
 
     may::config()
         .set_pool_capacity(10000)
         .set_stack_size(0x1000)
-        .set_workers(8);
+        .set_workers(4);
 
     // let buildhasher = SelfBuilder{};
 
@@ -203,73 +235,142 @@ fn main() {
 
 
 
-lazy_static!{
-    static ref KVs: SelfKvUtil = {
-        let mut kv_wrap = Vec::<Arc<Mutex<HashMap<String, String>>>>::with_capacity(TOTAL_SLOTS);
-        for i in 0..TOTAL_SLOTS {
-            kv_wrap.push(Arc::new(Mutex::new( HashMap::<String, String>::with_capacity(SLOT_SIZE))));
+lazy_static! {
+    static ref P_ZRM_REGEX: pcre2::bytes::Regex = pcre2::bytes::Regex::new(r#"/zrmv/(?P<key>.*)/(?P<value>.*)"#).unwrap();
+
+    static ref SHARDED_LRU: ShardLRU = {
+        let mut dbs = Vec::<Arc<Mutex<LruCache<String, Bytes, fnv::FnvBuildHasher>>>>::with_capacity(SHARD_SIZE);
+        for i in 0..SHARD_SIZE {
+            dbs.push(Arc::new(Mutex::new(
+                LruCache::<String, Bytes, fnv::FnvBuildHasher>::with_hasher(SHARD_CAPACITY, fnv::FnvBuildHasher::default())
+            )));
         }
-        let kvs = SelfKvUtil { dbs: kv_wrap };
 
-        kvs
+        ShardLRU {
+            dbs: dbs
+        }
     };
 
-    static ref KV: Mutex<HashMap<String, String>> = {
-        Mutex::new(HashMap::with_capacity(TOTAL_SLOTS * SLOT_SIZE))
-    };
+    static ref SHARDED_LRU_ZSET: ShardLRUZSet = {
+        let mut dbs = Vec::<Arc<Mutex<LruCache<String, sorted_vec::SortedSet<ScoreValue>, fnv::FnvBuildHasher>>>>::with_capacity(SHARD_SIZE);
+        for i in 0..SHARD_SIZE {
+            dbs.push(Arc::new(Mutex::new(
+                LruCache::<String, sorted_vec::SortedSet<ScoreValue>, fnv::FnvBuildHasher>::with_hasher(SHARD_CAPACITY, fnv::FnvBuildHasher::default())
+            )));
+        }
 
-    static ref unlock_kv: DashMap<String, String> = {
-        DashMap::with_capacity(TOTAL_SLOTS * SLOT_SIZE)
-    };
-
-    static ref dash_map: DashMap<String, String, fnv::FnvBuildHasher> = {
-        DashMap::<String, String, fnv::FnvBuildHasher>::with_capacity_and_hasher_and_shard_amount(14<<30/100/TOTAL_SLOTS, fnv::FnvBuildHasher::default(), TOTAL_SLOTS)
-    };
-
-    static ref bytes_hash_map: DashMap<String, Bytes, fnv::FnvBuildHasher> = {
-        DashMap::<String, Bytes, fnv::FnvBuildHasher>::with_capacity_and_hasher_and_shard_amount(14<<30/100/TOTAL_SLOTS, fnv::FnvBuildHasher::default(), TOTAL_SLOTS)
+        ShardLRUZSet {
+            dbs: dbs
+        }
     };
 
 }
 
-
-struct SelfBuilder{
-    
-}
-impl BuildHasher for SelfBuilder{
-    type Hasher = fnv::FnvHasher;
-    fn build_hasher(&self) -> Self::Hasher {
-        // todo!()
-        fnv::FnvHasher::default()
-    }
-}
-impl Clone for SelfBuilder {
-    fn clone(&self) -> Self {
-        Self {  }
-    }
+struct ShardLRU {
+    dbs: Vec<Arc<Mutex<LruCache<String, Bytes, fnv::FnvBuildHasher>>>>,
 }
 
- fn aof(bytes: BytesMut) {
-    use std::io::Write;
-    let mut file =  OpenOptions::new().append(true).open("aof.csv").unwrap();
-    file.write_all(bytes.as_ref()).unwrap();
+struct ShardLRUZSet {
+    dbs: Vec<Arc<Mutex<LruCache<String, sorted_vec::SortedSet<ScoreValue>, fnv::FnvBuildHasher>>>>,
 }
 
-fn load_aof_file() {
-    let mut file = std::fs::File::open("aof.csv").unwrap();
-    let mut contents = String::new();
-    file.read_to_string(&mut contents).unwrap();
-    let kvs: Vec<&str> = contents.split('\n').collect();
-    for kv in kvs {
-        let tmp: Vec<&str> = kv.split(',').collect();
-
-        if tmp.len() == 2 {
-            let key = String::from_utf8(tmp[0].as_bytes().to_vec()).unwrap();
-            let val = tmp[1];
-            let mut val_bytes = BytesMut::with_capacity(val.len());
-            val_bytes.write_str(val);
-            
-            bytes_hash_map.insert(key, Bytes::from(val_bytes));
+impl ShardLRU {
+    fn get_db(&self, key: &str) -> &Arc<Mutex<LruCache<String, Bytes, fnv::FnvBuildHasher>>> {
+        let mut hasher = fnv::FnvHasher::default();
+        hasher.write(key.as_ref());
+        let slot = hasher.finish() % SHARD_SIZE_64;
+        if let Some(db) = self.dbs.get(slot as usize) {
+            db
+        } else {
+            &self.dbs[0]
         }
     }
+
+    fn get(&self, key: &str) -> Option<Bytes> {
+        let mut db = self.get_db(key).lock().unwrap();
+        if let Some(val) = db.get(key) {
+            Some((*val).clone())
+        } else {
+            None
+        }
+    }
+
+    fn set(&self, key: &str, val: &str) {
+        let mut db = self.get_db(key).lock().unwrap();
+        db.put(key.to_owned(), Bytes::from(val.to_owned()));
+        // write_to_aof_buffer(key, val);
+    }
+
+    fn set_unsave(&self, key: &str, val: &str) {
+        let mut db = self.get_db(key).lock().unwrap();
+        db.put(key.to_owned(), Bytes::from(val.to_owned()));
+    }
+
+    fn remove(&self, key: &str) {
+        let mut db = self.get_db(key).lock().unwrap();
+        db.pop(key);
+    }
 }
+
+impl ShardLRUZSet {
+    fn get_db(&self, key: &str) -> &Arc<Mutex<LruCache<String, sorted_vec::SortedSet<ScoreValue>, fnv::FnvBuildHasher>>> {
+        let mut hasher = fnv::FnvHasher::default();
+        hasher.write(key.as_ref());
+        let slot = hasher.finish() % SHARD_SIZE_64;
+        if let Some(db) = self.dbs.get(slot as usize) {
+            db
+        } else {
+            &self.dbs[0]
+        }
+    }
+
+    fn zadd(&self, key: &str, scoreValue: ScoreValue) {
+        let mut db = self.get_db(key).lock().unwrap();
+        if let Some(set) = db.get_mut(key) {
+            set.find_or_insert(scoreValue);
+        } else {
+            let mut set = sorted_vec::SortedSet::new();
+            set.find_or_insert(scoreValue);
+            db.push(key.to_string(), set);
+        }
+    }
+
+    fn zrange(&self, key: &str, range: ZRange) -> Option::<Vec::<ScoreValue>> {
+        let mut res = Vec::new();
+
+        let mut db = self.get_db(key).lock().unwrap();
+        if let Some(set) = db.get(key) {        
+            for v in set.iter() {
+                if v.score >= range.min_score && v.score <= range.max_score {
+                    res.push(ScoreValue {
+                        score: v.score,
+                        value: v.value.to_owned(),
+                    });
+                }
+            }
+        } else {
+            return None;
+        }
+
+        Some(res)
+    }
+
+    fn zrmv(&self, key: &str, value: &str) {
+        let mut db = self.get_db(key).lock().unwrap();
+        if let Some(set) = db.get_mut(key) {
+            let mut new_set = sorted_vec::SortedSet::with_capacity(set.capacity());
+            for (index, v) in set.iter().enumerate() {
+                if v.value != value {
+                    new_set.find_or_insert(v.clone());
+                }
+            }
+            db.push(key.to_string(), new_set);
+        }
+    }
+
+    fn remove(&self, key: &str) {
+        let mut db = self.get_db(key).lock().unwrap();
+        db.pop(key);
+    }
+}
+
